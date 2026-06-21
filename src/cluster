@@ -1,0 +1,67 @@
+"""
+cluster.py
+----------
+Standard unsupervised pipeline:
+
+1. Standardize the embedding features.
+2. Reduce to 3 dimensions with PCA (a stand-in for UMAP/t-SNE, kept
+   dependency-light and deterministic for a small repo).
+3. Cluster with K-Means.
+4. Report basic clustering quality (silhouette score) and a
+   cluster-vs-ground-truth crosstab, which is good practice whenever
+   synthetic ground truth is available.
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+RANDOM_STATE = 42
+
+
+def reduce_to_3d(X, random_state=RANDOM_STATE):
+    """Standardize then project embeddings down to 3 components via PCA."""
+    X_scaled = StandardScaler().fit_transform(X)
+    pca = PCA(n_components=3, random_state=random_state)
+    X_3d = pca.fit_transform(X_scaled)
+    explained = pca.explained_variance_ratio_
+    return X_3d, explained
+
+
+def run_kmeans(X_3d, n_clusters, random_state=RANDOM_STATE):
+    km = KMeans(n_clusters=n_clusters, n_init=10, random_state=random_state)
+    cluster_ids = km.fit_predict(X_3d)
+    score = silhouette_score(X_3d, cluster_ids)
+    return cluster_ids, score
+
+
+def summarize(df, cluster_ids):
+    df = df.copy()
+    df["cluster"] = cluster_ids
+    crosstab = pd.crosstab(df["true_topic"], df["cluster"])
+    return df, crosstab
+
+
+if __name__ == "__main__":
+    df = pd.read_csv("data/synthetic_embeddings.csv")
+    emb_cols = [c for c in df.columns if c.startswith("emb_")]
+    X = df[emb_cols].values
+
+    X_3d, explained = reduce_to_3d(X)
+    print(f"PCA explained variance ratio (3 components): {explained.round(3)}")
+
+    n_clusters = df["true_topic"].nunique()
+    cluster_ids, score = run_kmeans(X_3d, n_clusters)
+    print(f"K-Means silhouette score: {score:.3f}")
+
+    df_out, crosstab = summarize(df, cluster_ids)
+    print("\nCluster vs. ground-truth topic:")
+    print(crosstab)
+
+    for i, axis in enumerate(["pc1", "pc2", "pc3"]):
+        df_out[axis] = X_3d[:, i]
+    df_out.to_csv("data/clustered_embeddings.csv", index=False)
+    print("\nWrote data/clustered_embeddings.csv")
